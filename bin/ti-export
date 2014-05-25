@@ -1,0 +1,125 @@
+#!/usr/bin/env perl
+# Initial release by @xtetsuji at 2013/11/10
+# See following document for detail.
+
+use strict;
+use warnings;
+use utf8;
+
+use LWP::UserAgent;
+use Web::Query;
+
+binmode STDOUT, ':utf8';
+binmode STDERR, ':utf8';
+
+my $VERSION = "0.01";
+my $DATE_REVISION = "2013-11-10";
+
+my $username = shift;
+
+if ( !$username ) {
+    die "username is required\n";
+}
+
+if ( $username =~ /[\W-]/ ) {
+    die "username is required as alphabet and numeric and _ and -.\n";
+}
+
+my $ua = LWP::UserAgent->new(
+    agent => "TheInterviews Exporter/$VERSION/$DATE_REVISION",
+);
+my $endpoind_url = "http://theinterviews.jp";
+my $base_url = "$endpoind_url/$username";
+
+my $document = wq($base_url);
+
+my @article;
+
+my $log_cb = sub {
+    my $i = shift;
+    my $data = {};
+    #print $i . ": " . $_->find("h1")->text . "\n";
+    $data->{id} = $_->attr("id");
+    $data->{title} = $_->find("h1")->text;
+        $data->{photo_url} = $_->find(".photo img")->attr("src");
+    download($data->{photo_url}, $data->{id}) if $data->{photo_url};
+    $data->{photo_caption} = $_->find(".photo p.caption")->text;
+    $data->{publish_date} = $_->find(".publish_date")->text;
+    s/^\s+//,
+        s/\s+$// for $data->{publish_date};
+    $_->find(".photo")->remove;
+    $_->find(".publish_date")->remove;
+    $data->{article} = $_->find(".note")->html;
+    s{<br />}{\n}g, s/&hellip;/…/g, s/^ //gm,
+        s/&#x([0-9A-F]{4});/ chr hex $1 /egi for $data->{article};
+    push @article, $data;
+};
+
+$document->find(".log")->each($log_cb);
+
+# $next_href eq '/:username/page/:number'
+while ( my $next_href = $document->find(q{a[rel="next"]})->attr("href") ) {
+    my $page_url = $endpoind_url . $next_href;
+    warn ">>> retrieve $page_url\n";
+    $document = wq($page_url); # previous $document having object is trashed.
+    $document->find(".log")->each($log_cb);
+}
+
+# output: plain text mode.
+for my $data (@article) {
+    my $content = '';
+    $content .= "Title: $data->{title}\n";
+    $content .= "Photo-Caption: " . ($data->{photo_caption} || '') . "\n";
+    $content .= "Photo-URL: " . ($data->{photo_url} || '') . "\n";
+    $content .= "Publish-Date: $data->{publish_date}\n";
+    $content .= "Article-Id: $data->{id}\n";
+    $content .= "\n";
+    $content .= $data->{article};
+    writefile($data->{id} . ".txt", $content);
+}
+
+sub download {
+    my ($url, $id) = @_;
+    if ( !$url || !$id ) {
+        die "download requires url and id.";
+    }
+    my ($ext) = $url =~ /\.(\w+)$/;
+    my $res = $ua->get($url);
+    open my $fh, '>:raw', "$id.$ext";
+    print {$fh} $res->content;
+}
+
+sub writefile {
+    my ($file, $content) = @_;
+    open my $fh, '>:utf8', $file;
+    print {$fh} $content;
+    return 1;
+}
+
+__END__
+
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+ti-export - The Interviews article exporter and downloader.
+
+=head1 SYNOPSIS
+
+ perl ti-export USERNAME
+ # downloaded *.txt and *.jpg at current directory.
+
+=head1 DESCRIPTION
+
+(stub)
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (C) 2013 by OGATA Tetsuji
+
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself.
+
+=cut
